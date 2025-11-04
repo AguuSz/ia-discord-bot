@@ -5,6 +5,7 @@ import os
 import logging
 from dotenv import load_dotenv
 from utils.itad_client import get_steam_game_prices
+from utils.steam_client import get_user_library
 import json
 import google.generativeai as genai
 import re
@@ -24,6 +25,7 @@ load_dotenv()
 
 # Configuración del bot
 TOKEN = os.getenv('DISCORD_TOKEN')
+STEAM_API_KEY = os.getenv('STEAM_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')
 
@@ -33,6 +35,10 @@ if GEMINI_API_KEY:
     logger.info(f"Gemini configurado con modelo: {GEMINI_MODEL}")
 else:
     logger.warning("GEMINI_API_KEY no encontrada. Las funciones de IA estarán deshabilitadas.")
+
+# Validar Steam API Key
+if not STEAM_API_KEY:
+    logger.warning("STEAM_API_KEY no encontrada. El bot no podrá obtener bibliotecas de Steam.")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -79,54 +85,52 @@ async def get_recommendations(interaction: discord.Interaction, url: str, model:
     await interaction.response.defer(thinking=True)
 
     try:
+        # Validar Steam API Key
+        if not STEAM_API_KEY:
+            await interaction.followup.send(
+                "❌ Error: Steam API Key no configurada. Contacta al administrador del bot."
+            )
+            return
+
         # Validar que sea una URL de Steam válida
-        if "steamcommunity.com/id/" not in url:
+        if "steamcommunity.com/id/" not in url and "steamcommunity.com/profiles/" not in url:
             logger.warning(f"[BOT] URL inválida proporcionada: {url}")
             await interaction.followup.send(
-                "❌ URL inválida. Debe ser una URL de perfil de Steam (e.g., https://steamcommunity.com/id/Agus)"
+                "❌ URL inválida. Debe ser una URL de perfil de Steam:\n"
+                "- Custom URL: `https://steamcommunity.com/id/username`\n"
+                "- Steam ID: `https://steamcommunity.com/profiles/76561198XXXXXXXXX`"
             )
             return
 
-        # Extraer el username de la URL
-        username = url.split("steamcommunity.com/id/")[-1].rstrip('/')
-        logger.info(f"[BOT] Username extraído: {username}")
+        # Extraer el username o Steam ID de la URL
+        if "steamcommunity.com/id/" in url:
+            username = url.split("steamcommunity.com/id/")[-1].rstrip('/')
+        else:
+            username = url.split("steamcommunity.com/profiles/")[-1].rstrip('/')
 
-        # Cargar el JSON mock
-        mock_file_path = os.path.join(os.path.dirname(__file__), "mock_data", "steam_libraries.json")
+        logger.info(f"[BOT] Obteniendo biblioteca para: {username}")
 
-        if not os.path.exists(mock_file_path):
-            logger.error(f"[BOT] Archivo mock no encontrado: {mock_file_path}")
-            await interaction.followup.send(
-                "❌ Error: Archivo de datos mock no encontrado."
-            )
-            return
+        # Obtener biblioteca de Steam usando la API real
+        library_result = await get_user_library(STEAM_API_KEY, username)
 
-        with open(mock_file_path, 'r', encoding='utf-8') as f:
-            steam_data = json.load(f)
-
-        # Buscar el usuario en el JSON
-        if username not in steam_data:
-            logger.warning(f"[BOT] Usuario no encontrado: {username}")
-
-            # Crear lista de usuarios disponibles
-            available_users = list(steam_data.keys())
-            user_list = "\n".join([f"- {user}" for user in available_users])
-
+        if not library_result["success"]:
+            logger.error(f"[BOT] Error al obtener biblioteca: {library_result.get('error')}")
             embed = discord.Embed(
-                title="❌ Usuario no encontrado",
-                description=f"El usuario `{username}` no se encuentra en la base de datos.\n\n**Posibles opciones:**\n{user_list}",
+                title="❌ Error al obtener biblioteca de Steam",
+                description=library_result.get("error", "Error desconocido"),
                 color=discord.Color.red()
             )
             await interaction.followup.send(embed=embed)
             return
 
         # Usuario encontrado, obtener sus juegos
-        user_data = steam_data[username]
-        games = user_data["games"]
-        total_games = len(games)
-        total_hours = sum(game["playtime_hours"] for game in games)
+        username = library_result["username"]
+        steamid = library_result["steamid"]
+        games = library_result["games"]
+        total_games = library_result["game_count"]
 
-        logger.info(f"[BOT] Usuario encontrado: {username} con {total_games} juegos")
+        logger.info(f"[BOT] Biblioteca obtenida: {total_games} juegos para {username}")
+        total_hours = sum(game["playtime_hours"] for game in games)
 
         # Crear embed principal
         embed = discord.Embed(

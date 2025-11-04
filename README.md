@@ -4,6 +4,7 @@ Bot de Discord con inteligencia artificial que analiza tu biblioteca de Steam y 
 
 ## ✨ Características
 
+- 🎮 **Integración con Steam API**: Obtiene tu biblioteca real de Steam en tiempo real
 - 🤖 **Recomendaciones con IA**: Utiliza Google Gemini AI para analizar tu biblioteca y sugerir juegos similares
 - 💰 **Información de precios**: Obtiene precios actuales e históricos de IsThereAnyDeal.com
 - 📊 **Estadísticas de biblioteca**: Visualiza tus juegos más jugados y estadísticas generales
@@ -14,6 +15,7 @@ Bot de Discord con inteligencia artificial que analiza tu biblioteca de Steam y 
 
 - **Python 3.11+**
 - **Discord.py** - Interacción con Discord API
+- **Steam Web API** - Obtención de bibliotecas de juegos
 - **Google Generative AI** - IA de recomendaciones
 - **IsThereAnyDeal API** - Información de precios
 - **Docker** - Contenerización
@@ -22,6 +24,7 @@ Bot de Discord con inteligencia artificial que analiza tu biblioteca de Steam y 
 
 - Docker y Docker Compose instalados
 - Token de Discord Bot
+- Steam API Key
 - API Key de Google Gemini
 - Python 3.11+ (si se ejecuta sin Docker)
 
@@ -43,6 +46,7 @@ cp .env.example .env
 Edita el archivo `.env` con tus credenciales:
 ```env
 DISCORD_TOKEN=tu_token_de_discord
+STEAM_API_KEY=tu_steam_api_key
 GEMINI_API_KEY=tu_api_key_de_gemini
 GEMINI_MODEL=gemini-2.5-flash-lite
 ```
@@ -87,6 +91,15 @@ python bot.py
    - Attach Files
    - Use Slash Commands
 
+### Obtener Steam API Key
+
+1. Ve a [Steam Web API Key](https://steamcommunity.com/dev/apikey)
+2. Inicia sesión con tu cuenta de Steam
+3. Registra tu dominio (puedes usar `localhost` para desarrollo)
+4. Copia la API Key a tu archivo `.env`
+
+**Nota:** El perfil de Steam del usuario debe ser **público** para que el bot pueda acceder a su biblioteca de juegos.
+
 ### Obtener API Key de Gemini
 
 1. Ve a [Google AI Studio](https://aistudio.google.com/app/apikey)
@@ -117,7 +130,12 @@ python bot.py
 ### Ejemplo
 
 ```
-/get-recommendations url:https://steamcommunity.com/id/Agus model:Gemini 2.5 Pro (Más potente)
+/get-recommendations url:https://steamcommunity.com/id/tu_usuario model:Gemini 2.5 Pro (Más potente)
+```
+
+O con Steam ID numérico:
+```
+/get-recommendations url:https://steamcommunity.com/profiles/76561198183693995
 ```
 
 **Respuesta del bot:**
@@ -129,6 +147,8 @@ python bot.py
    - Precio más bajo histórico
    - Link directo a Steam Store
 
+**Importante:** El perfil de Steam debe ser público para que el bot pueda acceder a la biblioteca.
+
 ## 📁 Estructura del Proyecto
 
 ```
@@ -138,43 +158,16 @@ ia-bot-discord/
 ├── Dockerfile                  # Configuración Docker
 ├── docker-compose.yml          # Orquestación Docker
 ├── .env                        # Variables de entorno (no versionado)
+├── .env.example                # Plantilla de variables de entorno
+├── .gitignore                  # Archivos a ignorar en git
 ├── README.md                   # Este archivo
-├── urls.md                     # Documentación de URLs válidas
-├── mock_data/
-│   └── steam_libraries.json    # Datos mock de usuarios
 └── utils/
     ├── __init__.py
+    ├── steam_client.py         # Cliente para Steam Web API
     └── itad_client.py          # Cliente para IsThereAnyDeal API
 ```
 
-## 🎯 Usuarios Mock Disponibles
-
-El bot utiliza datos mock para demostración. Usuarios disponibles:
-
-- `Agus` (100 juegos)
-- `usuario1` - `usuario9` (50-76 juegos cada uno)
-
-Para más detalles, consulta [urls.md](urls.md)
-
 ## 🔧 Desarrollo
-
-### Agregar nuevos usuarios mock
-
-Edita el archivo `mock_data/steam_libraries.json`:
-
-```json
-{
-  "nuevo_usuario": {
-    "games": [
-      {
-        "appid": 730,
-        "name": "Counter-Strike 2",
-        "playtime_hours": 250
-      }
-    ]
-  }
-}
-```
 
 ### Logs
 
@@ -210,18 +203,26 @@ docker-compose down
 2. Comprueba que tengas cuota disponible en Google AI Studio
 3. Prueba con un modelo diferente (algunos requieren acceso especial)
 
+### No se pueden obtener los juegos
+
+1. Verifica que el perfil de Steam sea **público**
+2. Comprueba que la Steam API Key sea válida
+3. Asegúrate de que la URL del perfil sea correcta
+4. Algunos perfiles pueden tener la biblioteca privada en la configuración de privacidad
+
 ### Recomendaciones incorrectas
 
-1. El bot usa datos mock, no la biblioteca real de Steam
-2. Los juegos recomendados son generados por IA y pueden variar
-3. Prueba con diferentes modelos de Gemini para comparar resultados
+1. Los juegos recomendados son generados por IA y pueden variar
+2. Prueba con diferentes modelos de Gemini para comparar resultados
+3. La IA se basa en tus horas jugadas para identificar tus preferencias
 
 ## 📝 Notas
 
-- Los datos de usuarios son **simulados** (mock), no se consulta la API real de Steam
+- Los datos de usuarios son **reales** obtenidos de Steam Web API
 - Las recomendaciones son generadas por **IA** y pueden variar entre ejecuciones
 - Los **precios** son reales y se obtienen en tiempo real de IsThereAnyDeal.com
-- El bot muestra "IA Bot is thinking..." mientras procesa (puede tomar 10-30 segundos)
+- El bot muestra "IA Bot is thinking..." mientras procesa (puede tomar 10-40 segundos)
+- **Importante:** El perfil de Steam debe ser público para acceder a la biblioteca
 
 ## 🤝 Contribuciones
 
