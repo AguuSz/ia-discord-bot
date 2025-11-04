@@ -1,0 +1,13 @@
+services:
+  discord-bot:
+    build: .
+    container_name: ia-bot-discord
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./bot.py:/app/bot.py
+      - ./utils:/app/utils
+      - ./mock_data:/app/mock_data
+    environment:
+      - PYTHONUNBUFFERED=1
