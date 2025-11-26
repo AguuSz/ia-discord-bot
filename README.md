@@ -10,6 +10,7 @@ Bot de Discord con inteligencia artificial que analiza tu biblioteca de Steam y 
 - 📊 **Estadísticas de biblioteca**: Visualiza tus juegos más jugados y estadísticas generales
 - 🎯 **Modelos personalizables**: Elige entre 7 modelos diferentes de Gemini en tiempo de ejecución
 - 🚀 **Respuesta unificada**: Todo en un solo mensaje con múltiples embeds visuales
+- 🏷️ **Historial de ofertas**: Consulta el historial completo de precios y ofertas desde SteamDB
 
 ## 🛠️ Tecnologías
 
@@ -108,7 +109,9 @@ python bot.py
 
 ## 📖 Uso
 
-### Comando Principal
+### Comandos Disponibles
+
+#### 1. `/get-recommendations` - Recomendaciones personalizadas
 
 ```
 /get-recommendations url:https://steamcommunity.com/id/USERNAME [model:opcional]
@@ -149,6 +152,52 @@ O con Steam ID numérico:
 
 **Importante:** El perfil de Steam debe ser público para que el bot pueda acceder a la biblioteca.
 
+---
+
+#### 2. `/should-buy` - Historial de ofertas
+
+```
+/should-buy url:https://store.steampowered.com/app/1627720/ [country:opcional]
+```
+
+**Parámetros:**
+- `url` (obligatorio): URL del juego en Steam Store
+- `country` (opcional): País para precios (Argentina, Estados Unidos, Brasil, Europa, Reino Unido)
+
+**Países disponibles:**
+- Argentina (ARS) - **Por defecto**
+- Estados Unidos (USD)
+- Brasil (BRL)
+- Europa (EUR)
+- Reino Unido (GBP)
+
+**Ejemplo:**
+
+```
+/should-buy url:https://store.steampowered.com/app/1627720/Lies_of_P/ country:Argentina (ARS)
+```
+
+**Respuesta del bot:**
+- 📊 Estadísticas de precios (actual, mínimo, máximo)
+- 🏷️ **Historial completo de ofertas** con rangos de fechas (desde → hasta)
+  - Muestra todas las ofertas históricas, no solo las últimas
+  - Cada oferta incluye: fecha inicio, fecha fin, precio y descuento
+  - Si hay eventos de Steam (como "Summer Sale"), se muestran también
+- 💡 Recomendación de compra basada en historial
+- 🔗 Link directo a SteamDB
+
+**Formato de visualización:**
+```
+1. 01/12/2024 → 15/12/2024
+   💰 ARS$ 13,499.00 (-50%)
+   🎉 Autumn Sale 2024
+
+2. 20/11/2024 → 30/11/2024
+   💰 ARS$ 15,999.00 (-40%)
+```
+
+**Nota:** Este comando utiliza web scraping de SteamDB y puede tardar 10-20 segundos. Si hay muchas ofertas, se dividirán en múltiples secciones para cumplir con los límites de Discord.
+
 ## 📁 Estructura del Proyecto
 
 ```
@@ -164,7 +213,8 @@ ia-bot-discord/
 └── utils/
     ├── __init__.py
     ├── steam_client.py         # Cliente para Steam Web API
-    └── itad_client.py          # Cliente para IsThereAnyDeal API
+    ├── itad_client.py          # Cliente para IsThereAnyDeal API
+    └── steamdb_client.py       # Cliente para SteamDB (web scraping)
 ```
 
 ## 🔧 Desarrollo
@@ -223,6 +273,9 @@ docker-compose down
 - Los **precios** son reales y se obtienen en tiempo real de IsThereAnyDeal.com
 - El bot muestra "IA Bot is thinking..." mientras procesa (puede tomar 10-40 segundos)
 - **Importante:** El perfil de Steam debe ser público para acceder a la biblioteca
+- El comando `/should-buy` usa **Playwright** para web scraping de SteamDB
+  - Requiere instalación adicional: `playwright install chromium` (se hace automáticamente en Docker)
+  - Bypasea protección de Cloudflare usando navegador real en modo headless
 
 ## 🤝 Contribuciones
 

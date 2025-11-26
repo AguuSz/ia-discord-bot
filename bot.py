@@ -6,6 +6,7 @@ import logging
 from dotenv import load_dotenv
 from utils.itad_client import get_steam_game_prices
 from utils.steam_client import get_user_library
+from utils.steamdb_client import extract_steam_app_id_from_url, get_steamdb_price_history, analyze_price_data
 import json
 import google.generativeai as genai
 import re
@@ -395,6 +396,183 @@ Juegos que el usuario YA TIENE (NO recomiendes ninguno de estos):
 
     except Exception as e:
         logger.error(f"[BOT] Error en comando /get-recommendations: {e}", exc_info=True)
+        embed = discord.Embed(
+            title="❌ Error inesperado",
+            description=f"Ocurrió un error al procesar la solicitud: {str(e)}",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed)
+
+@app_commands.allowed_installs(guilds=True, users=False)
+@app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+@bot.tree.command(
+    name="should-buy",
+    description="Obtiene el historial de ofertas de un juego de Steam desde SteamDB"
+)
+@app_commands.describe(
+    url="URL del juego en Steam (e.g., https://store.steampowered.com/app/1627720/)",
+    country="Código de país para precios (opcional, por defecto: ar para Argentina)"
+)
+@app_commands.choices(country=[
+    app_commands.Choice(name="Argentina (ARS)", value="ar"),
+    app_commands.Choice(name="Estados Unidos (USD)", value="us"),
+    app_commands.Choice(name="Brasil (BRL)", value="br"),
+    app_commands.Choice(name="Europa (EUR)", value="eu"),
+    app_commands.Choice(name="Reino Unido (GBP)", value="gb"),
+])
+async def should_buy(interaction: discord.Interaction, url: str, country: app_commands.Choice[str] = None):
+    # Determinar código de país
+    cc = country.value if country else "ar"
+    logger.info(f"[BOT] Comando /should-buy ejecutado por {interaction.user} con URL: {url} y país: {cc}")
+
+    # Defer la respuesta
+    await interaction.response.defer(thinking=True)
+
+    try:
+        # Extraer Steam App ID de la URL
+        appid = extract_steam_app_id_from_url(url)
+
+        if not appid:
+            logger.warning(f"[BOT] No se pudo extraer App ID de la URL: {url}")
+            await interaction.followup.send(
+                "❌ URL inválida. Debe ser una URL de Steam Store:\n"
+                "- Formato: `https://store.steampowered.com/app/APPID/nombre_del_juego/`\n"
+                "- Ejemplo: `https://store.steampowered.com/app/1627720/Lies_of_P/`"
+            )
+            return
+
+        logger.info(f"[BOT] App ID extraído: {appid}")
+
+        # Obtener historial de precios de SteamDB
+        price_data = await get_steamdb_price_history(appid, cc)
+
+        if not price_data or not price_data.get('success'):
+            logger.error(f"[BOT] No se pudieron obtener datos de SteamDB para App ID: {appid}")
+            embed = discord.Embed(
+                title="❌ Error al obtener historial de precios",
+                description=f"No se pudo obtener el historial de precios desde SteamDB para el juego.\n\n"
+                           f"**App ID:** {appid}\n"
+                           f"**País:** {cc.upper()}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        # Analizar los datos
+        analysis = analyze_price_data(price_data, cc)
+
+        if not analysis:
+            logger.error(f"[BOT] Error al analizar datos de precios")
+            await interaction.followup.send("❌ Error al analizar el historial de precios.")
+            return
+
+        logger.info(f"[BOT] Análisis completado: {analysis['total_records']} registros")
+
+        # Crear embed principal
+        embed = discord.Embed(
+            title=f"💰 Historial de Ofertas - App ID {appid}",
+            description=f"Análisis de precios desde SteamDB",
+            color=discord.Color.green(),
+            url=f"https://steamdb.info/app/{appid}/"
+        )
+
+        # Estadísticas generales
+        stats_text = f"**Precio actual:** {analysis['current_price_formatted']}"
+        if analysis['current_discount'] > 0:
+            stats_text += f" **(-{analysis['current_discount']}%)**"
+        stats_text += f"\n**Precio mínimo histórico:** {analysis['currency']} {analysis['min_price']:.2f}"
+        stats_text += f"\n**Precio máximo histórico:** {analysis['currency']} {analysis['max_price']:.2f}"
+        stats_text += f"\n**Total de cambios de precio:** {analysis['total_records']}"
+
+        embed.add_field(
+            name="📊 Estadísticas",
+            value=stats_text,
+            inline=False
+        )
+
+        # Filtrar solo las ofertas (descuentos)
+        discounts = [offer for offer in analysis['offers'] if offer['is_discount']]
+
+        if discounts:
+            # Mostrar TODAS las ofertas con rangos de fechas
+            offers_text = ""
+            field_count = 0
+
+            for i, offer in enumerate(discounts, 1):
+                date_from = offer['date']
+                date_to = offer['date_end']
+                price = offer['price_formatted']
+                discount = offer['discount']
+                event = offer['event']
+
+                # Formato: fecha_inicio → fecha_fin: precio (descuento)
+                line = f"**{i}.** `{date_from}` → `{date_to}`\n"
+                line += f"   💰 {price} **(-{discount}%)**"
+                if event:
+                    line += f"\n   🎉 *{event}*"
+                line += "\n\n"
+
+                # Discord tiene límite de 1024 caracteres por field
+                # Si agregar esta línea excede el límite, crear un nuevo field
+                if len(offers_text) + len(line) > 950:
+                    field_count += 1
+                    embed.add_field(
+                        name=f"🏷️ Historial de Ofertas (Parte {field_count})",
+                        value=offers_text,
+                        inline=False
+                    )
+                    offers_text = line
+                else:
+                    offers_text += line
+
+            # Agregar cualquier texto restante
+            if offers_text:
+                if field_count > 0:
+                    # Si ya hay partes, esta es la última parte
+                    embed.add_field(
+                        name=f"🏷️ Historial de Ofertas (Parte {field_count + 1})",
+                        value=offers_text,
+                        inline=False
+                    )
+                else:
+                    # Si no hay partes, es el único field
+                    embed.add_field(
+                        name=f"🏷️ Historial de Ofertas ({len(discounts)} ofertas encontradas)",
+                        value=offers_text,
+                        inline=False
+                    )
+        else:
+            embed.add_field(
+                name="🏷️ Ofertas",
+                value="No se encontraron ofertas para este juego.",
+                inline=False
+            )
+
+        # Recomendación
+        if analysis['current_discount'] > 0:
+            recommendation = f"✅ **¡Hay una oferta activa de {analysis['current_discount']}%!**\n"
+            if analysis['current_price'] <= analysis['min_price']:
+                recommendation += "💎 **Este es el precio más bajo histórico. ¡Es un buen momento para comprar!**"
+            else:
+                diff = analysis['current_price'] - analysis['min_price']
+                recommendation += f"⚠️ El precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f} ({analysis['currency']} {diff:.2f} menos que ahora)."
+        else:
+            recommendation = f"⏳ **No hay ofertas activas actualmente.**\n"
+            recommendation += f"El último precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f}."
+
+        embed.add_field(
+            name="💡 Recomendación",
+            value=recommendation,
+            inline=False
+        )
+
+        embed.set_footer(text=f"Datos de SteamDB • País: {cc.upper()}")
+
+        await interaction.followup.send(embed=embed)
+        logger.info(f"[BOT] Comando /should-buy completado exitosamente para App ID {appid}")
+
+    except Exception as e:
+        logger.error(f"[BOT] Error en comando /should-buy: {e}", exc_info=True)
         embed = discord.Embed(
             title="❌ Error inesperado",
             description=f"Ocurrió un error al procesar la solicitud: {str(e)}",
