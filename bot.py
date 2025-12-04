@@ -688,22 +688,31 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
 
         # Realizar análisis con Gemini si está disponible
         gemini_analysis = None
+        analysis_time = None
         if GEMINI_API_KEY:
             try:
+                import time
                 game_name = price_data.get('game_name', f'App ID {appid}')
                 logger.info(f"[BOT] Iniciando análisis Gemini para: {game_name}")
+
+                # Medir tiempo de análisis
+                start_time = time.time()
                 gemini_analysis = await analyze_game_purchase_with_gemini(
                     full_history_json,
                     game_name,
                     selected_model
                 )
+                end_time = time.time()
+                analysis_time = end_time - start_time
+
                 if gemini_analysis and gemini_analysis.get('success'):
-                    logger.info(f"[BOT] Análisis Gemini completado exitosamente")
+                    logger.info(f"[BOT] Análisis Gemini completado exitosamente en {analysis_time:.2f}s")
                 else:
                     logger.warning(f"[BOT] Análisis Gemini falló: {gemini_analysis.get('error', 'Unknown error')}")
             except Exception as e:
                 logger.error(f"[BOT] Error al ejecutar análisis Gemini: {e}", exc_info=True)
                 gemini_analysis = None
+                analysis_time = None
 
         # Crear embed principal
         embed = discord.Embed(
@@ -824,17 +833,20 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
 
         # Recomendación (con análisis Gemini si disponible)
         if gemini_analysis and gemini_analysis.get('success'):
-            # Usar análisis de Gemini
+            # Usar análisis de Gemini - formato simplificado
             considerations = "\n".join([f"• {c}" for c in gemini_analysis['considerations']])
             conclusion_emoji = "✅" if gemini_analysis['conclusion'] == 'conviene' else "⏳"
 
-            recommendation = f"**Análisis basado en IA:**\n\n"
-            recommendation += f"**Consideraciones:**\n{considerations}\n\n"
+            # Construir mensaje limpio
+            recommendation = f"{considerations}\n\n"
             recommendation += f"{conclusion_emoji} **Conclusión:** "
             if gemini_analysis['conclusion'] == 'conviene':
-                recommendation += f"Conviene comprar **{gemini_analysis['game_name']}** ahora."
+                recommendation += f"**Conviene** comprar {gemini_analysis['game_name']} ahora."
             else:
-                recommendation += f"No conviene comprar **{gemini_analysis['game_name']}** ahora. Es mejor esperar."
+                recommendation += f"**No conviene** comprar {gemini_analysis['game_name']} ahora."
+
+            # Agregar información del modelo y tiempo
+            recommendation += f"\n\n_Modelo: {selected_model} • Tiempo de análisis: {analysis_time:.2f}s_"
         else:
             # Fallback a recomendación básica
             if analysis['current_discount'] > 0:
@@ -854,11 +866,8 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
             inline=False
         )
 
-        # Footer con información del modelo si Gemini fue usado
-        footer_text = f"Datos de SteamDB • País: {cc.upper()}"
-        if gemini_analysis and gemini_analysis.get('success'):
-            footer_text += f" • Análisis: Gemini {selected_model}"
-        embed.set_footer(text=footer_text)
+        # Footer
+        embed.set_footer(text=f"Datos de SteamDB • País: {cc.upper()}")
 
         # Crear vista con botón de descarga
         view = DownloadHistoryView(price_data, analysis, appid, cc, sales_calendar)
