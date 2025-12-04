@@ -183,8 +183,12 @@ O con Steam ID numérico:
   - Muestra todas las ofertas históricas, no solo las últimas
   - Cada oferta incluye: fecha inicio, fecha fin, precio y descuento
   - Si hay eventos de Steam (como "Summer Sale"), se muestran también
+- 🎉 **Steam Sales** (información en tiempo real)
+  - Sales activas actualmente en Steam
+  - Próximas sales programadas con fechas
 - 💡 Recomendación de compra basada en historial
 - 🔗 Link directo a SteamDB
+- 📥 **Botón de descarga** para obtener el historial completo en formato JSON
 
 **Formato de visualización:**
 ```
@@ -196,7 +200,67 @@ O con Steam ID numérico:
    💰 ARS$ 15,999.00 (-40%)
 ```
 
-**Nota:** Este comando utiliza web scraping de SteamDB y puede tardar 10-20 segundos. Si hay muchas ofertas, se dividirán en múltiples secciones para cumplir con los límites de Discord.
+**Descarga de JSON:**
+
+Al presionar el botón "📥 Descargar JSON Completo", recibirás un archivo JSON con:
+- App ID del juego
+- País y moneda utilizados
+- Estadísticas completas (precios mínimo, máximo, actual)
+- Array completo de todas las ofertas con fechas exactas
+- Datos raw de SteamDB para análisis avanzado
+
+**Estructura del JSON:**
+```json
+{
+  "appid": "1627720",
+  "country": "AR",
+  "statistics": {
+    "total_records": 25,
+    "min_price": 13499.00,
+    "max_price": 26599.00,
+    "current_price": 18599.00,
+    "current_discount": 30,
+    "currency": "ARS$"
+  },
+  "steam_sales": {
+    "success": true,
+    "current_sales": [
+      {
+        "name": "Winter Sale 2024",
+        "start": "19 Dec 2024",
+        "end": "2 Jan 2025"
+      }
+    ],
+    "upcoming_sales": [
+      {
+        "name": "Spring Sale 2025",
+        "date": "20 Mar 2025"
+      }
+    ],
+    "has_current_sales": true,
+    "has_upcoming_sales": true
+  },
+  "offers": [
+    {
+      "date": "01/12/2024",
+      "date_end": "15/12/2024",
+      "price": 13499.00,
+      "price_formatted": "ARS$ 13,499.00",
+      "discount": 50,
+      "event": "Autumn Sale 2024",
+      "is_discount": true
+    }
+  ],
+  "raw_data": { ... }
+}
+```
+
+**Notas:**
+- Este comando utiliza web scraping de SteamDB y puede tardar 15-30 segundos (scrapea dos páginas: historial de precios y calendario de sales)
+- Si hay muchas ofertas, se dividirán en múltiples secciones para cumplir con los límites de Discord
+- El botón de descarga está disponible por 5 minutos después de ejecutar el comando
+- El archivo JSON descargado es privado (solo visible para quien presionó el botón)
+- La información de Steam Sales es actualizada en tiempo real desde SteamDB
 
 ## 📁 Estructura del Proyecto
 

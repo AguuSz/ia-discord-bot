@@ -6,10 +6,11 @@ import logging
 from dotenv import load_dotenv
 from utils.itad_client import get_steam_game_prices
 from utils.steam_client import get_user_library
-from utils.steamdb_client import extract_steam_app_id_from_url, get_steamdb_price_history, analyze_price_data
+from utils.steamdb_client import extract_steam_app_id_from_url, get_steamdb_price_history, analyze_price_data, get_steam_sales_calendar
 import json
 import google.generativeai as genai
 import re
+import io
 
 # Configuración de logging
 logging.basicConfig(
@@ -45,6 +46,66 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Vista con botón para descargar JSON del historial de precios
+class DownloadHistoryView(discord.ui.View):
+    def __init__(self, price_data: dict, analysis: dict, appid: str, cc: str, sales_calendar: dict = None):
+        super().__init__(timeout=300)  # 5 minutos de timeout
+        self.price_data = price_data
+        self.analysis = analysis
+        self.appid = appid
+        self.cc = cc
+        self.sales_calendar = sales_calendar
+
+    @discord.ui.button(label="📥 Descargar JSON Completo", style=discord.ButtonStyle.primary, custom_id="download_json")
+    async def download_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Crear JSON con formato estructurado
+            history_json = {
+                "appid": self.appid,
+                "country": self.cc.upper(),
+                "statistics": {
+                    "total_records": self.analysis['total_records'],
+                    "min_price": self.analysis['min_price'],
+                    "max_price": self.analysis['max_price'],
+                    "current_price": self.analysis['current_price'],
+                    "current_discount": self.analysis['current_discount'],
+                    "currency": self.analysis['currency']
+                },
+                "steam_sales": self.sales_calendar if self.sales_calendar else {
+                    "success": False,
+                    "message": "Sales information not available"
+                },
+                "offers": self.analysis['offers'],
+                "raw_data": self.price_data
+            }
+
+            # Convertir a JSON con formato bonito
+            json_content = json.dumps(history_json, indent=2, ensure_ascii=False)
+
+            # Crear archivo en memoria usando BytesIO
+            json_bytes = io.BytesIO(json_content.encode('utf-8'))
+            json_file = discord.File(
+                fp=json_bytes,
+                filename=f"steamdb_history_{self.appid}_{self.cc}.json"
+            )
+
+            # Enviar archivo como respuesta
+            await interaction.response.send_message(
+                f"📊 **Historial completo de precios - App ID {self.appid}**\n"
+                f"✅ Archivo JSON generado con éxito.",
+                file=json_file,
+                ephemeral=True  # Solo visible para quien presionó el botón
+            )
+
+            logger.info(f"[BOT] JSON descargado por {interaction.user} para App ID {self.appid}")
+
+        except Exception as e:
+            logger.error(f"[BOT] Error al generar JSON: {e}", exc_info=True)
+            await interaction.response.send_message(
+                "❌ Error al generar el archivo JSON. Por favor intenta nuevamente.",
+                ephemeral=True
+            )
 
 @bot.event
 async def on_ready():
@@ -403,6 +464,126 @@ Juegos que el usuario YA TIENE (NO recomiendes ninguno de estos):
         )
         await interaction.followup.send(embed=embed)
 
+async def analyze_game_purchase_with_gemini(history_json: dict, game_name: str, model_name: str = None) -> dict:
+    """
+    Analiza el historial de precios y ofertas con Gemini para recomendar si conviene comprar.
+
+    Args:
+        history_json: JSON completo con historial de precios y sales
+        game_name: Nombre del juego
+        model_name: Modelo de Gemini a usar (opcional, por defecto GEMINI_MODEL)
+
+    Returns:
+        dict con success, game_name, considerations, conclusion
+    """
+    if not GEMINI_API_KEY:
+        logger.warning("[BOT] Gemini API Key no configurada, no se puede realizar análisis")
+        return {"success": False, "error": "API Key no configurada"}
+
+    selected_model = model_name if model_name else GEMINI_MODEL
+
+    try:
+        from datetime import datetime
+
+        # Obtener fecha actual
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Crear prompt según especificaciones
+        prompt = f"""En base al siguiente JSON necesito que analices las próximas fechas en las que el juego va a estar en oferta, considerando que la fecha actual es {current_date} y que me digas si me conviene o no me conviene comprar el juego ahora.
+
+Para recomendar si conviene o no, necesitarás basarte en:
+1. Si actualmente tiene una oferta (en cuyo caso SÍ conviene comprarlo ahora)
+2. Si NO tiene una oferta, revisar cuál es la próxima sale más cercana:
+   - Si es un plazo mayor a 1 mes: conviene comprarlo ahora dado el motivo de que falta mucho para la próxima oferta
+   - Si el plazo es menor a 1 mes: conviene esperar dado que dentro de no mucho va a haber una oferta
+
+IMPORTANTE:
+- Analiza tanto el historial de ofertas (offers) como las Steam Sales próximas (steam_sales)
+- Considera el precio actual vs el precio mínimo histórico
+- Considera el descuento actual si existe
+- Debes proporcionar entre 3 y 5 consideraciones relevantes
+
+Debes retornar SOLO un JSON con el siguiente formato, sin texto adicional ni markdown:
+
+{{
+  "game_name": "{game_name}",
+  "considerations": [
+    "Primera consideración relevante",
+    "Segunda consideración relevante",
+    "Tercera consideración relevante"
+  ],
+  "conclusion": "conviene"
+}}
+
+Nota: El campo "conclusion" debe ser exactamente "conviene" o "no conviene" (en minúsculas).
+
+El JSON con los datos del juego es el siguiente:
+{json.dumps(history_json, indent=2, ensure_ascii=False)}"""
+
+        logger.info(f"[BOT] Iniciando análisis Gemini para {game_name} con modelo {selected_model}")
+        logger.debug(f"[BOT] Tamaño del prompt: {len(prompt)} caracteres")
+
+        # Llamar a Gemini
+        model = genai.GenerativeModel(selected_model)
+        response = model.generate_content(prompt)
+
+        logger.debug(f"[BOT] Respuesta de Gemini recibida")
+
+        # Extraer y limpiar respuesta
+        response_text = response.text.strip()
+
+        # Limpiar markdown si viene con ```json
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+
+        response_text = response_text.strip()
+
+        logger.debug(f"[BOT] Respuesta limpiada: {response_text[:200]}...")
+
+        # Parsear JSON
+        analysis = json.loads(response_text)
+
+        # Validar estructura
+        required_fields = ['game_name', 'considerations', 'conclusion']
+        if not all(field in analysis for field in required_fields):
+            logger.error(f"[BOT] Respuesta de Gemini incompleta, faltan campos requeridos")
+            return {"success": False, "error": "Respuesta incompleta"}
+
+        # Validar tipos
+        if not isinstance(analysis['considerations'], list) or len(analysis['considerations']) == 0:
+            logger.error(f"[BOT] Consideraciones inválidas en respuesta de Gemini")
+            return {"success": False, "error": "Consideraciones inválidas"}
+
+        # Normalizar conclusión
+        conclusion_lower = analysis['conclusion'].lower().strip()
+        if conclusion_lower not in ['conviene', 'no conviene']:
+            logger.error(f"[BOT] Conclusión inválida: {analysis['conclusion']}")
+            return {"success": False, "error": "Conclusión inválida"}
+
+        analysis['conclusion'] = conclusion_lower
+
+        logger.info(f"[BOT] Análisis Gemini completado: {analysis['conclusion']}")
+
+        return {
+            "success": True,
+            "game_name": analysis['game_name'],
+            "considerations": analysis['considerations'],
+            "conclusion": analysis['conclusion']
+        }
+
+    except json.JSONDecodeError as e:
+        logger.error(f"[BOT] Error al parsear JSON de Gemini: {e}")
+        logger.error(f"[BOT] Respuesta recibida: {response_text[:500]}")
+        return {"success": False, "error": "Error al parsear respuesta"}
+
+    except Exception as e:
+        logger.error(f"[BOT] Error en análisis Gemini: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
 @app_commands.allowed_installs(guilds=True, users=False)
 @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
 @bot.tree.command(
@@ -411,19 +592,32 @@ Juegos que el usuario YA TIENE (NO recomiendes ninguno de estos):
 )
 @app_commands.describe(
     url="URL del juego en Steam (e.g., https://store.steampowered.com/app/1627720/)",
-    country="Código de país para precios (opcional, por defecto: ar para Argentina)"
+    country="Código de país para precios (opcional, por defecto: ar para Argentina)",
+    model="Modelo de Gemini para análisis (opcional, por defecto usa el del .env)"
 )
-@app_commands.choices(country=[
-    app_commands.Choice(name="Argentina (ARS)", value="ar"),
-    app_commands.Choice(name="Estados Unidos (USD)", value="us"),
-    app_commands.Choice(name="Brasil (BRL)", value="br"),
-    app_commands.Choice(name="Europa (EUR)", value="eu"),
-    app_commands.Choice(name="Reino Unido (GBP)", value="gb"),
-])
-async def should_buy(interaction: discord.Interaction, url: str, country: app_commands.Choice[str] = None):
-    # Determinar código de país
+@app_commands.choices(
+    country=[
+        app_commands.Choice(name="Argentina (ARS)", value="ar"),
+        app_commands.Choice(name="Estados Unidos (USD)", value="us"),
+        app_commands.Choice(name="Brasil (BRL)", value="br"),
+        app_commands.Choice(name="Europa (EUR)", value="eu"),
+        app_commands.Choice(name="Reino Unido (GBP)", value="gb"),
+    ],
+    model=[
+        app_commands.Choice(name="Gemini 2.5 Pro (Más potente)", value="gemini-2.5-pro"),
+        app_commands.Choice(name="Gemini 2.5 Flash (Equilibrado)", value="gemini-2.5-flash"),
+        app_commands.Choice(name="Gemini 2.5 Flash Lite (Rápido y económico)", value="gemini-2.5-flash-lite"),
+        app_commands.Choice(name="Gemini 2.0 Flash (Estable)", value="gemini-2.0-flash"),
+        app_commands.Choice(name="Gemini 2.0 Flash Experimental", value="gemini-2.0-flash-exp"),
+        app_commands.Choice(name="Gemini 2.0 Flash Lite", value="gemini-2.0-flash-lite"),
+        app_commands.Choice(name="LearnLM 2.0 Flash Experimental", value="learnlm-2.0-flash-experimental")
+    ]
+)
+async def should_buy(interaction: discord.Interaction, url: str, country: app_commands.Choice[str] = None, model: app_commands.Choice[str] = None):
+    # Determinar código de país y modelo
     cc = country.value if country else "ar"
-    logger.info(f"[BOT] Comando /should-buy ejecutado por {interaction.user} con URL: {url} y país: {cc}")
+    selected_model = model.value if model else GEMINI_MODEL
+    logger.info(f"[BOT] Comando /should-buy ejecutado por {interaction.user} con URL: {url}, país: {cc} y modelo: {selected_model}")
 
     # Defer la respuesta
     await interaction.response.defer(thinking=True)
@@ -467,6 +661,49 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
             return
 
         logger.info(f"[BOT] Análisis completado: {analysis['total_records']} registros")
+
+        # Obtener información de sales activas y próximas
+        logger.info(f"[BOT] Obteniendo información de Steam Sales...")
+        sales_calendar = await get_steam_sales_calendar()
+
+        # Generar JSON completo para análisis Gemini
+        full_history_json = {
+            "appid": appid,
+            "country": cc.upper(),
+            "statistics": {
+                "total_records": analysis.get('total_records', 0),
+                "min_price": analysis.get('min_price', 0),
+                "max_price": analysis.get('max_price', 0),
+                "current_price": analysis.get('current_price', 0),
+                "current_discount": analysis.get('current_discount', 0),
+                "currency": analysis.get('currency', 'N/A')
+            },
+            "steam_sales": sales_calendar if sales_calendar else {
+                "success": False,
+                "message": "Sales information not available"
+            },
+            "offers": analysis.get('offers', []),
+            "raw_data": price_data if price_data else {}
+        }
+
+        # Realizar análisis con Gemini si está disponible
+        gemini_analysis = None
+        if GEMINI_API_KEY:
+            try:
+                game_name = price_data.get('game_name', f'App ID {appid}')
+                logger.info(f"[BOT] Iniciando análisis Gemini para: {game_name}")
+                gemini_analysis = await analyze_game_purchase_with_gemini(
+                    full_history_json,
+                    game_name,
+                    selected_model
+                )
+                if gemini_analysis and gemini_analysis.get('success'):
+                    logger.info(f"[BOT] Análisis Gemini completado exitosamente")
+                else:
+                    logger.warning(f"[BOT] Análisis Gemini falló: {gemini_analysis.get('error', 'Unknown error')}")
+            except Exception as e:
+                logger.error(f"[BOT] Error al ejecutar análisis Gemini: {e}", exc_info=True)
+                gemini_analysis = None
 
         # Crear embed principal
         embed = discord.Embed(
@@ -548,17 +785,68 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
                 inline=False
             )
 
-        # Recomendación
-        if analysis['current_discount'] > 0:
-            recommendation = f"✅ **¡Hay una oferta activa de {analysis['current_discount']}%!**\n"
-            if analysis['current_price'] <= analysis['min_price']:
-                recommendation += "💎 **Este es el precio más bajo histórico. ¡Es un buen momento para comprar!**"
+        # Información de Steam Sales
+        if sales_calendar and sales_calendar.get('success'):
+            sales_text = ""
+
+            # Countdown de próxima sale
+            if sales_calendar.get('has_countdown'):
+                countdown = sales_calendar['next_sale_countdown']
+                if countdown and countdown.get('text'):
+                    sales_text += f"⏱️ **Próxima Sale:** {countdown['text']}\n\n"
+
+            # Sales activas
+            if sales_calendar.get('has_current_sales'):
+                sales_text += "🟢 **Sales Activas:**\n"
+                for sale in sales_calendar['current_sales'][:3]:  # Mostrar máximo 3
+                    sales_text += f"• {sale['name']}\n"
+                    if sale.get('end'):
+                        sales_text += f"  ⏰ Termina: {sale['end']}\n"
+
+            # Sales próximas
+            if sales_calendar.get('has_upcoming_sales'):
+                if sales_text:
+                    sales_text += "\n"
+                sales_text += "🔵 **Próximas Sales:**\n"
+                for sale in sales_calendar['upcoming_sales'][:3]:  # Mostrar máximo 3
+                    sales_text += f"• {sale['name']}\n"
+                    if sale.get('date'):
+                        sales_text += f"  📅 {sale['date']}\n"
+
+            if not sales_text:
+                sales_text = "ℹ️ No hay información de sales disponible."
+
+            embed.add_field(
+                name="🎉 Steam Sales",
+                value=sales_text,
+                inline=False
+            )
+
+        # Recomendación (con análisis Gemini si disponible)
+        if gemini_analysis and gemini_analysis.get('success'):
+            # Usar análisis de Gemini
+            considerations = "\n".join([f"• {c}" for c in gemini_analysis['considerations']])
+            conclusion_emoji = "✅" if gemini_analysis['conclusion'] == 'conviene' else "⏳"
+
+            recommendation = f"**Análisis basado en IA:**\n\n"
+            recommendation += f"**Consideraciones:**\n{considerations}\n\n"
+            recommendation += f"{conclusion_emoji} **Conclusión:** "
+            if gemini_analysis['conclusion'] == 'conviene':
+                recommendation += f"Conviene comprar **{gemini_analysis['game_name']}** ahora."
             else:
-                diff = analysis['current_price'] - analysis['min_price']
-                recommendation += f"⚠️ El precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f} ({analysis['currency']} {diff:.2f} menos que ahora)."
+                recommendation += f"No conviene comprar **{gemini_analysis['game_name']}** ahora. Es mejor esperar."
         else:
-            recommendation = f"⏳ **No hay ofertas activas actualmente.**\n"
-            recommendation += f"El último precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f}."
+            # Fallback a recomendación básica
+            if analysis['current_discount'] > 0:
+                recommendation = f"✅ **¡Hay una oferta activa de {analysis['current_discount']}%!**\n"
+                if analysis['current_price'] <= analysis['min_price']:
+                    recommendation += "💎 **Este es el precio más bajo histórico. ¡Es un buen momento para comprar!**"
+                else:
+                    diff = analysis['current_price'] - analysis['min_price']
+                    recommendation += f"⚠️ El precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f} ({analysis['currency']} {diff:.2f} menos que ahora)."
+            else:
+                recommendation = f"⏳ **No hay ofertas activas actualmente.**\n"
+                recommendation += f"El último precio más bajo fue {analysis['currency']} {analysis['min_price']:.2f}."
 
         embed.add_field(
             name="💡 Recomendación",
@@ -566,9 +854,16 @@ async def should_buy(interaction: discord.Interaction, url: str, country: app_co
             inline=False
         )
 
-        embed.set_footer(text=f"Datos de SteamDB • País: {cc.upper()}")
+        # Footer con información del modelo si Gemini fue usado
+        footer_text = f"Datos de SteamDB • País: {cc.upper()}"
+        if gemini_analysis and gemini_analysis.get('success'):
+            footer_text += f" • Análisis: Gemini {selected_model}"
+        embed.set_footer(text=footer_text)
 
-        await interaction.followup.send(embed=embed)
+        # Crear vista con botón de descarga
+        view = DownloadHistoryView(price_data, analysis, appid, cc, sales_calendar)
+
+        await interaction.followup.send(embed=embed, view=view)
         logger.info(f"[BOT] Comando /should-buy completado exitosamente para App ID {appid}")
 
     except Exception as e:
