@@ -335,7 +335,6 @@ docker-compose down
 - Los datos de usuarios son **reales** obtenidos de Steam Web API
 - Las recomendaciones son generadas por **IA** y pueden variar entre ejecuciones
 - Los **precios** son reales y se obtienen en tiempo real de IsThereAnyDeal.com
-- El bot muestra "IA Bot is thinking..." mientras procesa (puede tomar 10-40 segundos)
 - **Importante:** El perfil de Steam debe ser público para acceder a la biblioteca
 - El comando `/should-buy` usa **Playwright** para web scraping de SteamDB
   - Requiere instalación adicional: `playwright install chromium` (se hace automáticamente en Docker)
@@ -354,14 +353,3 @@ Las contribuciones son bienvenidas. Por favor:
 ## 📄 Licencia
 
 Este proyecto es de código abierto y está disponible bajo la licencia MIT.
-
-## 👤 Autor
-
-Desarrollado con ❤️ usando Claude Code
-
----
-
-**¿Necesitas ayuda?** Abre un issue en el repositorio o consulta la documentación de:
-- [Discord.py](https://discordpy.readthedocs.io/)
-- [Google Gemini API](https://ai.google.dev/docs)
-- [IsThereAnyDeal API](https://docs.isthereanydeal.com/)
